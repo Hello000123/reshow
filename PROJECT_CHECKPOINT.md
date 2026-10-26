@@ -1,5 +1,7 @@
 # Project checkpoint
 
+Publication update (26 October 2026 HKT): user requested a public GitHub repository. Created https://github.com/Hello000123/reshow and pushed the website, documentation, assets, tests, references and verification screenshots on `master`; local `origin` tracks that repository. Initial website commit: `bc173ac`. Added `.gitignore` for local secrets, dependencies and caches. Re-ran all 13 service tests and the CSV test successfully. Repository visibility verified as PUBLIC. GitHub Pages hosting was not configured. No remaining publication work; next action is backend integration as described below. The original implementation checkpoint follows for historical context.
+
 Objective: six-tab ReShow desktop frontend matching references, with mock asynchronous services, no backend or Settings.
 
 Completed: all six pages, shared UI/styles, local SVG illustrations, async mock services, versioned storage, demo scenarios, CSV export, print CSS, README and backend handoff. Inspected AGENT.md and all seven reference images (two Overview variants); original instructions and references remain unchanged. Buildless ES modules. Fixed demo clock 6 Oct 2026 13:20 HKT, independent from today's wall clock.
