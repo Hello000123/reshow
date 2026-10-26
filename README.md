@@ -55,20 +55,12 @@ js/data.js              Seed records, demo clock and storage version
 js/services.js          Async data access, validation and acknowledgements
 js/pages/               One UI module per tab
 assets/                 Local SVG illustrations
-tests/                  Focused service/export checks and image fixture
-BACKEND_HANDOFF.md       Public service contracts and data structures
-VERIFICATION.md         Browser checks and known verification limits
 ```
 
-To connect the teammate's backend, replace service internals while retaining page-facing shapes. See **BACKEND_HANDOFF.md** for fields, units, validation, operation status and acknowledgement semantics. Production authentication, permissions, telemetry, command delivery, durable storage, image storage and hardware integration belong to the backend/device work.
+To connect a backend, replace service internals while retaining page-facing shapes. Production authentication, permissions, telemetry, command delivery, durable storage, image storage and hardware integration belong to the backend/device work.
 
-## Focused checks
+## Files needed to run
 
-The app does not need Node.js. Node 22+ can optionally run the development checks:
+Serve `index.html` together with the complete `css/`, `js/` and `assets/` folders, preserving their relative paths. No build step or package installation is required.
 
-```powershell
-node tests/services.test.mjs
-node tests/report-export.test.mjs
-```
-
-No package installation is required. The tests run with in-memory fake storage, without altering browser demo records.
+The README and `.gitignore` support repository use but are not runtime dependencies. Design references, agent instructions, implementation notes, backend handoff notes, tests and verification screenshots are local development material and are excluded from this repository's current files.
