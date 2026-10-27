@@ -22,7 +22,12 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-      - run: npm run check && npm test && python3 -m unittest discover -s checks -p '*_test.py' && npm run build
+      - run: npm run check && npm test && python3 -m unittest discover -s checks -p '*_test.py' && npm run build && python3 scripts/preflight.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deployment-preflight
+          path: preflight-report.json
+          if-no-files-found: error
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: website
@@ -71,7 +76,7 @@ jobs:
 
   ai-review:
     needs: [check, sonar]
-    if: always() && needs.sonar.outputs.report-ready == 'true' && github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    if: always() && needs.check.result == 'success' && needs.sonar.outputs.report-ready == 'true' && github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -87,6 +92,10 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::835822826851:role/ee3070-reshow-github-actions
           aws-region: us-east-1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deployment-preflight
+          path: sonar-report/
       - name: Load AI review key
         shell: bash
         run: |
@@ -94,7 +103,7 @@ jobs:
           test -n "$key" && test "$key" != None
           echo "::add-mask::$key"
           echo "AI_API_KEY=$key" >> "$GITHUB_ENV"
-      - name: Review sanitized Sonar metadata
+      - name: Enforce AI review of sanitized Sonar and deployment evidence
         env:
           AI_BASE_URL: https://18.163.201.242/ica/harry/v1
           AI_MODEL: ${{ vars.AI_MODEL || 'claude-sonnet-5-5' }}
@@ -106,7 +115,7 @@ jobs:
           if [ ! -f sonar-report/ai-review.md ]; then
             echo 'AI review could not run because a prerequisite failed. See the failed job step; deployment is blocked.' > sonar-report/ai-review.md
           fi
-      - name: Preserve advisory review
+      - name: Preserve deployment AI review
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -117,7 +126,7 @@ jobs:
         if: always()
         run: |
           echo '## AI review' >> "$GITHUB_STEP_SUMMARY"
-          echo 'See the ai-review artifact. Advisory text is never executed; API failures block deployment.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'See the ai-review artifact. A block verdict, malformed response, missing preflight evidence or API failure blocks deployment; review text is never executed.' >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
     needs: [check, sonar, ai-review]
@@ -136,21 +145,22 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::835822826851:role/ee3070-reshow-github-actions
           aws-region: us-east-1
-      - name: Deploy approved commit through constrained SSM document
+      - name: Validate the installed extractor against this commit before changing production
         env:
           DEPLOY_SHA: ${{ github.sha }}
-        run: |
-          command_id=$(aws ssm send-command --instance-ids i-00301bb65c9133a63 --document-name EE3070-ReShow-DeployFrontend --parameters "CommitSha=$DEPLOY_SHA" --query Command.CommandId --output text)
-          for attempt in $(seq 1 90); do
-            status=$(aws ssm get-command-invocation --command-id "$command_id" --instance-id i-00301bb65c9133a63 --query Status --output text 2>/dev/null || true)
-            case "$status" in
-              Success) break ;;
-              Failed|Cancelled|TimedOut|Cancelling) echo "SSM deployment: $status"; exit 1 ;;
-            esac
-            sleep 5
-          done
-          test "$status" = Success
-          aws ssm get-command-invocation --command-id "$command_id" --instance-id i-00301bb65c9133a63 --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}'
+        run: bash scripts/deploy-static.sh "$DEPLOY_SHA" validate
+      - name: Stage and verify the exact API version without changing live traffic
+        id: api-stage
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        run: python3 scripts/api-deploy.py prepare --state /tmp/reshow-api-state.json --commit "$DEPLOY_SHA"
+      - name: Deploy approved static files through the constrained SSM document
+        id: static-deploy
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        run: bash scripts/deploy-static.sh "$DEPLOY_SHA"
+      - name: Activate the verified API version
+        run: python3 scripts/api-deploy.py activate --state /tmp/reshow-api-state.json
       - name: Refresh CloudFront and verify deployed commit
         env:
           DEPLOY_SHA: ${{ github.sha }}
@@ -159,4 +169,19 @@ jobs:
           aws cloudfront wait invalidation-completed --distribution-id E1P2W5YKS25NPQ --id "$invalidation_id"
           curl --fail --silent --show-error --retry 4 https://dkbznu9f5nh9n.cloudfront.net/release.json -o /tmp/release.json
           python3 -c 'import json,os; assert json.load(open("/tmp/release.json"))["commit"] == os.environ["DEPLOY_SHA"], "Live commit differs from deployment"'
+          curl --fail --silent --show-error --retry 4 https://dkbznu9f5nh9n.cloudfront.net/api/health -o /tmp/api-release.json
+          python3 -c 'import json,os; assert json.load(open("/tmp/api-release.json"))["commit"] == os.environ["DEPLOY_SHA"], "Live API commit differs from deployment"'
           echo "Deployed $DEPLOY_SHA to https://dkbznu9f5nh9n.cloudfront.net" >> "$GITHUB_STEP_SUMMARY"
+      - name: Restore the prior API and static release after a deployment failure
+        if: (failure() || cancelled()) && steps.api-stage.outcome == 'success' && steps.static-deploy.outcome != 'skipped'
+        env:
+          PREVIOUS_SHA: ${{ steps.api-stage.outputs.previous-static }}
+        run: |
+          rollback_failed=0
+          python3 scripts/api-deploy.py rollback --state /tmp/reshow-api-state.json || rollback_failed=1
+          bash scripts/deploy-static.sh "$PREVIOUS_SHA" || rollback_failed=1
+          invalidation_id=$(aws cloudfront create-invalidation --distribution-id E1P2W5YKS25NPQ --paths '/*' --query Invalidation.Id --output text) || rollback_failed=1
+          if [ -n "$invalidation_id" ]; then
+            aws cloudfront wait invalidation-completed --distribution-id E1P2W5YKS25NPQ --id "$invalidation_id" || rollback_failed=1
+          fi
+          test "$rollback_failed" = 0

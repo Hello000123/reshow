@@ -1,9 +1,10 @@
 import { icon } from "../ui.js";
+import { serializeUpload } from "../technology-upload.js";
 
 const THREE_URL =
-  "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
+  "js/vendor/three-r128/three.min.js";
 const GLTF_LOADER_URL =
-  "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js";
+  "js/vendor/three-r128/GLTFLoader.js";
 let threeReady;
 
 function loadScript(src) {
@@ -123,7 +124,7 @@ export async function render(container) {
       </section>
       <section class="card technology-ai">
         <div class="card-head"><h2>Image-to-JSON assistant</h2><span class="badge info">Workers AI</span></div>
-        <p>Enter your Cloudflare credentials and choose an artifact image to generate a suggested name and description with example exhibit settings. Credentials and images are sent to this local Python server for the request only; they are not saved.</p>
+        <p>Enter your Cloudflare credentials and choose an artifact image to generate a suggested name and description with example exhibit settings. Credentials and images are sent over HTTPS to the ReShow API and then to Cloudflare for this request only; they are not saved.</p>
         <label class="technology-credential">Cloudflare Account ID
           <input data-account-id type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="Your 32-character account ID" required>
         </label>
@@ -347,6 +348,10 @@ export async function render(container) {
           return;
         }
         modelStatus.textContent = `Loading ${file.name}…`;
+        if (file.size > 25 * 1024 * 1024) {
+          modelStatus.textContent = "Choose a GLB model smaller than 25 MB.";
+          return;
+        }
         const url = URL.createObjectURL(file);
         new THREE.GLTFLoader().load(
           url,
@@ -606,9 +611,10 @@ export async function render(container) {
         data.append("image", blob, "image.jpg");
         data.append("account_id", accountId);
         data.append("api_token", apiToken);
+        const upload = await serializeUpload(data);
         const response = await fetch("/api/technology/generate-exhibit", {
           method: "POST",
-          body: data,
+          ...upload,
           signal,
         });
         const result = await response.json().catch(() => ({}));

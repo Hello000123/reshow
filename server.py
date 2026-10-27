@@ -1,20 +1,21 @@
 import argparse
 import json
 import re
-import threading
 from email import policy
+from email.message import Message
 from email.parser import BytesParser
+from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import unquote, urlsplit
+from urllib.error import HTTPError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 ROOT = Path(__file__).resolve().parent
 MAX_IMAGE_SIZE = 4 * 1024 * 1024
-LICENSE_ACCEPTED_MESSAGE = (
-    "Thank you for agreeing to this model's terms. You may now use the model."
-)
+MAX_REQUEST_SIZE = MAX_IMAGE_SIZE + 32 * 1024
+MAX_RESPONSE_SIZE = 256 * 1024
 PROMPT = """Analyze the attached image and identify the visible artifact. Return exactly one valid JSON object and no Markdown or extra text, using precisely these two keys:
 {
   "name": "A short, specific title for the visible image",
@@ -37,6 +38,19 @@ def decode_json_response(response):
     return value if isinstance(value, dict) else {}
 
 
+class NoRedirects(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, newurl):
+        # A redirect must never receive a visitor's BYOK Authorization header.
+        return None
+
+
+def read_cloudflare_response(response):
+    body = response.read(MAX_RESPONSE_SIZE + 1)
+    if len(body) > MAX_RESPONSE_SIZE:
+        raise RuntimeError("Cloudflare returned an oversized response.")
+    return decode_json_response(body)
+
+
 def cloudflare_request(endpoint, token, payload):
     request = Request(
         endpoint,
@@ -48,16 +62,13 @@ def cloudflare_request(endpoint, token, payload):
         method="POST",
     )
     try:
-        with urlopen(request, timeout=60) as response:
-            return response.status, decode_json_response(response.read())
+        with build_opener(NoRedirects()).open(request, timeout=40) as response:
+            return response.status, read_cloudflare_response(response)
     except HTTPError as error:
-        return error.code, decode_json_response(error.read())
-    except URLError as error:
-        raise RuntimeError("Could not connect to Cloudflare Workers AI.") from error
-    except TimeoutError as error:
-        raise RuntimeError("Cloudflare Workers AI did not respond in time.") from error
+        # Upstream bodies may echo credentials. Do not return or log them.
+        return error.code, {}
     except OSError as error:
-        raise RuntimeError("Cloudflare Workers AI transport failed.") from error
+        raise RuntimeError("Cloudflare Workers AI could not complete the request. Try again.") from error
 
 
 def extract_json_object(text):
@@ -112,30 +123,6 @@ def generate_exhibit(image_bytes, account_id, api_token):
         + account_id
         + "/ai/run/@cf/meta/llama-3.2-11b-vision-instruct"
     )
-    with StudioHandler.license_lock:
-        if account_id not in StudioHandler.accepted_accounts:
-            status, response = cloudflare_request(
-                endpoint, api_token, {"prompt": "agree"}
-            )
-            errors = response.get("errors", [])
-            api_message = (
-                errors[0].get("message", "")
-                if isinstance(errors, list)
-                and errors
-                and isinstance(errors[0], dict)
-                else ""
-            )
-            if not (
-                200 <= status < 300 and response.get("success")
-            ) and not (
-                status == 403 and LICENSE_ACCEPTED_MESSAGE in api_message
-            ):
-                raise RuntimeError(
-                    "Cloudflare model terms could not be accepted: "
-                    + (api_message or "unknown API error")
-                )
-            StudioHandler.accepted_accounts.add(account_id)
-
     status, response = cloudflare_request(
         endpoint,
         api_token,
@@ -146,25 +133,15 @@ def generate_exhibit(image_bytes, account_id, api_token):
             "temperature": 0.2,
         },
     )
-    errors = response.get("errors", [])
-    api_message = (
-        errors[0].get("message", "")
-        if isinstance(errors, list)
-        and errors
-        and isinstance(errors[0], dict)
-        else ""
-    )
     if not (200 <= status < 300 and response.get("success")):
         raise RuntimeError(
-            "Cloudflare Workers AI request failed (HTTP "
-            + str(status)
-            + "): "
-            + (api_message or "unknown API error")
+            "Cloudflare Workers AI rejected the request. Check your account, token, "
+            "model access and accepted model terms in Cloudflare."
         )
 
     result = response.get("result")
     generated = result.get("response") if isinstance(result, dict) else None
-    if not isinstance(generated, str) or not generated.strip():
+    if not isinstance(generated, str) or not generated.strip() or len(generated) > 16000:
         raise RuntimeError("Cloudflare returned no generated text. Try another image.")
     details = extract_json_object(generated)
     if details is None:
@@ -185,63 +162,73 @@ def generate_exhibit(image_bytes, account_id, api_token):
     }
 
 
-def parse_multipart_request(content_type, body):
-    if len(body) > MAX_IMAGE_SIZE + 32 * 1024:
+def multipart_message(content_type, body):
+    if len(body) > MAX_REQUEST_SIZE:
         raise UploadError(413, "The image must be smaller than 4 MB.")
+    if len(content_type) > 256 or "\r" in content_type or "\n" in content_type:
+        raise UploadError(400, "The image upload could not be read.")
+    if not content_type.lower().startswith("multipart/form-data;"):
+        raise UploadError(400, "Choose a JPEG, PNG, or WebP image and try again.")
+    header = Message()
+    header["Content-Type"] = content_type
+    boundary = header.get_boundary()
+    if not boundary or not re.fullmatch(r"[A-Za-z0-9'()+_,./:=? -]{1,70}", boundary):
+        raise UploadError(400, "The image upload boundary is invalid.")
+    if body.count(b"--" + boundary.encode("ascii")) != 4:
+        raise UploadError(400, "Upload exactly one image, account ID and API token.")
     try:
-        if not content_type.lower().startswith("multipart/form-data;"):
-            raise UploadError(400, "Choose a JPEG, PNG, or WebP image and try again.")
         message = BytesParser(policy=policy.default).parsebytes(
-            ("Content-Type: " + content_type + "\r\nMIME-Version: 1.0\r\n\r\n").encode(
-                "ascii"
-            )
-            + body
+            ("Content-Type: " + content_type + "\r\nMIME-Version: 1.0\r\n\r\n").encode("ascii") + body
         )
     except (LookupError, UnicodeEncodeError) as error:
         raise UploadError(400, "The image upload could not be read.") from error
-    if not message.is_multipart():
-        raise UploadError(400, "Choose a JPEG, PNG, or WebP image and try again.")
+    if not message.is_multipart() or message.defects:
+        raise UploadError(400, "The image upload could not be read.")
+    return message
 
+
+def uploaded_image(part):
+    image = part.get_payload(decode=True) or b""
+    if not image or len(image) > MAX_IMAGE_SIZE:
+        raise UploadError(413, "The image must be smaller than 4 MB.")
+    signatures = {
+        "image/jpeg": image.startswith(b"\xff\xd8\xff"),
+        "image/png": image.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/webp": image.startswith(b"RIFF") and image[8:12] == b"WEBP",
+    }
+    if not signatures.get(part.get_content_type()):
+        raise UploadError(415, "Only JPEG, PNG, and WebP images are supported.")
+    return image
+
+
+def uploaded_credential(part):
+    value = part.get_payload(decode=True) or b""
+    if len(value) > 4096:
+        raise UploadError(400, "Cloudflare credentials are too long.")
+    try:
+        return value.decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise UploadError(400, "Cloudflare credentials must be text.") from error
+
+
+def parse_multipart_request(content_type, body):
     fields = {}
     image = None
-    for part in message.iter_parts():
-        disposition = part.get_content_disposition()
-        if disposition != "form-data":
-            continue
+    seen = set()
+    for part in multipart_message(content_type, body).iter_parts():
         name = part.get_param("name", header="content-disposition")
+        if part.get_content_disposition() != "form-data" or name not in ("image", "account_id", "api_token") or name in seen:
+            raise UploadError(400, "Upload exactly one image, account ID and API token.")
+        seen.add(name)
         if name == "image":
-            image = part.get_payload(decode=True) or b""
-            image_type = part.get_content_type()
-            if not image or len(image) > MAX_IMAGE_SIZE:
-                raise UploadError(413, "The image must be smaller than 4 MB.")
-            is_jpeg = image.startswith(b"\xff\xd8\xff")
-            is_png = image.startswith(b"\x89PNG\r\n\x1a\n")
-            is_webp = (
-                len(image) >= 12
-                and image.startswith(b"RIFF")
-                and image[8:12] == b"WEBP"
-            )
-            if not (
-                (image_type == "image/jpeg" and is_jpeg)
-                or (image_type == "image/png" and is_png)
-                or (image_type == "image/webp" and is_webp)
-            ):
-                raise UploadError(415, "Only JPEG, PNG, and WebP images are supported.")
-        elif name in ("account_id", "api_token"):
-            value = part.get_content()
-            if isinstance(value, bytes):
-                try:
-                    value = value.decode("utf-8")
-                except UnicodeDecodeError as error:
-                    raise UploadError(400, "Cloudflare credentials must be text.") from error
-            if isinstance(value, str):
-                fields[name] = value.strip()
-
+            image = uploaded_image(part)
+        else:
+            fields[name] = uploaded_credential(part)
     account_id = fields.get("account_id", "")
     api_token = fields.get("api_token", "")
     if not re.fullmatch(r"[a-fA-F0-9]{32}", account_id):
         raise UploadError(400, "Enter a valid 32-character Cloudflare Account ID.")
-    if not api_token or len(api_token) > 4096:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,4096}", api_token):
         raise UploadError(400, "Enter a valid Cloudflare API token.")
     if image is None:
         raise UploadError(400, "Choose a JPEG, PNG, or WebP image and try again.")
@@ -249,11 +236,23 @@ def parse_multipart_request(content_type, body):
 
 
 class StudioHandler(SimpleHTTPRequestHandler):
-    accepted_accounts = set()
-    license_lock = threading.Lock()
-
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(ROOT), **kwargs)
+        super().__init__(*args, directory=kwargs.pop("directory", str(ROOT)), **kwargs)
+
+    def send_head(self):
+        path = unquote(urlsplit(self.path).path)
+        parts = Path(path.lstrip("/")).parts
+        allowed = path in ("/", "/index.html", "/release.json") or (
+            parts and parts[0] in ("css", "js", "assets")
+            and not any(part.startswith(".") for part in parts)
+        )
+        target = Path(self.translate_path(self.path)).resolve()
+        if path == "/":
+            target = target / "index.html"
+        if not allowed or not target.is_relative_to(Path(self.directory).resolve()) or not target.is_file():
+            self.send_error(404)
+            return None
+        return super().send_head()
 
     def send_json(self, status, data):
         body = json.dumps(data).encode("utf-8")
@@ -277,12 +276,10 @@ class StudioHandler(SimpleHTTPRequestHandler):
         if content_length <= 0:
             self.send_json(400, {"error": "Choose an image and try again."})
             return
-        if content_length > MAX_IMAGE_SIZE + 32 * 1024:
+        if content_length > MAX_REQUEST_SIZE:
             self.send_json(413, {"error": "The image must be smaller than 4 MB."})
             return
 
-        account_id = ""
-        api_token = ""
         try:
             image, account_id, api_token = parse_multipart_request(
                 self.headers.get("Content-Type", ""),
@@ -293,14 +290,9 @@ class StudioHandler(SimpleHTTPRequestHandler):
             )
         except UploadError as error:
             self.send_json(error.status, {"error": str(error)})
-        except RuntimeError as error:
-            message = str(error)
-            for secret in (account_id, api_token):
-                if secret:
-                    message = message.replace(secret, "[redacted]")
-            message = re.sub(r"Bearer\s+\S+", "Bearer [redacted]", message)
-            print("Image-to-JSON generation failed: " + message, flush=True)
-            self.send_json(502, {"error": message})
+        except RuntimeError:
+            self.send_json(502, {"error": "Cloudflare Workers AI could not complete the request. Check your credentials and model access in Cloudflare."})
+
 
 
 def main():
@@ -309,8 +301,9 @@ def main():
     )
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--directory", default=str(ROOT))
     args = parser.parse_args()
-    server = ThreadingHTTPServer((args.bind, args.port), StudioHandler)
+    server = ThreadingHTTPServer((args.bind, args.port), partial(StudioHandler, directory=args.directory))
     print(
         "ReShow is available at http://"
         + args.bind

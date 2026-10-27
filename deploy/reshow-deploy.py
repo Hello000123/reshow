@@ -2,6 +2,7 @@
 """Install only ReShow static runtime files from one immutable public commit."""
 import io
 import gzip
+import fcntl
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -17,7 +18,7 @@ import urllib.request
 ROOT = Path('/opt/ee3070-frontend')
 MAX_ARCHIVE = 25 * 1024 * 1024
 MAX_CONTENT = 50 * 1024 * 1024
-EXTENSIONS = {'.html', '.css', '.js', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.ico', '.woff', '.woff2'}
+EXTENSIONS = {'.html', '.css', '.js', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.ico', '.woff', '.woff2', '.glb'}
 
 
 def extract_runtime(archive, destination):
@@ -36,9 +37,12 @@ def extract_runtime(archive, destination):
             selected = str(relative) == 'index.html' or (relative.parts and relative.parts[0] in ('css', 'js', 'assets'))
             if not selected or member.isdir():
                 continue
-            if (not member.isfile() or relative.is_absolute() or '..' in parts or '\\' in member.name
-                    or PurePosixPath(member.name).is_absolute() or relative.suffix.lower() not in EXTENSIONS):
-                raise ValueError('Unsafe runtime archive member')
+            if not member.isfile():
+                raise ValueError(f'Unsafe runtime archive member {member.name!r}: only regular files are allowed')
+            if relative.is_absolute() or '..' in parts or '\\' in member.name:
+                raise ValueError(f'Unsafe runtime archive member {member.name!r}: invalid relative path')
+            if relative.suffix.lower() not in EXTENSIONS and str(relative) != 'js/vendor/three-r128/LICENSE.txt':
+                raise ValueError(f'Unsafe runtime archive member {member.name!r}: file type is not allowed')
             if str(relative) in written:
                 raise ValueError('Duplicate runtime archive member')
             total += member.size
@@ -62,13 +66,32 @@ def point_current(target):
     temporary.replace(ROOT / 'current')
 
 
-def deploy(commit):
+def download_archive(commit):
     if not re.fullmatch('[0-9a-f]{40}', commit):
         raise ValueError('Expected exactly one lowercase 40-character commit SHA')
     with urllib.request.urlopen('https://codeload.github.com/Hello000123/reshow/tar.gz/' + commit, timeout=60) as response:
         archive = response.read(MAX_ARCHIVE + 1)
     if len(archive) > MAX_ARCHIVE:
         raise ValueError('Archive exceeds size limit')
+    return archive
+
+
+def validate(commit):
+    archive = download_archive(commit)
+    with tempfile.TemporaryDirectory(prefix='reshow-validate-') as temporary:
+        extract_runtime(archive, Path(temporary))
+    print('Validated ReShow runtime archive ' + commit)
+
+
+def deploy(commit):
+    # Serialize a rollback with a still-running SSM command after cancellation.
+    with (ROOT / '.deploy.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        install_release(commit)
+
+
+def install_release(commit):
+    archive = download_archive(commit)
     releases = ROOT / 'releases'
     releases.mkdir(parents=True, exist_ok=True)
     target = releases / commit
@@ -113,6 +136,9 @@ def deploy(commit):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        raise SystemExit('Usage: reshow-deploy <40-character commit SHA>')
-    deploy(sys.argv[1])
+    if len(sys.argv) == 3 and sys.argv[1] == '--validate':
+        validate(sys.argv[2])
+    elif len(sys.argv) == 2:
+        deploy(sys.argv[1])
+    else:
+        raise SystemExit('Usage: reshow-deploy [--validate] <40-character commit SHA>')

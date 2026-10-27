@@ -27,3 +27,4 @@ Thumbs.db
 /dist/
 /sonar-report/
 /.scannerwork/
+/preflight-report.json
