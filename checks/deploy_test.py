@@ -24,6 +24,33 @@ def archive(extra=()):
     return data.getvalue()
 
 
+class DownloadTests(unittest.TestCase):
+    def test_download_uses_team_repository_and_exact_commit(self):
+        commit = '5c951b863b0b9cc57e084a175b096171488068bc'
+        content = archive()
+        with patch.object(deploy.urllib.request, 'urlopen') as fetch:
+            response = fetch.return_value.__enter__.return_value
+            response.read.return_value = content
+            self.assertEqual(deploy.download_archive(commit), content)
+            fetch.assert_called_once_with('https://codeload.github.com/ee3070-team/reshow/tar.gz/' + commit, timeout=60)
+            response.read.assert_called_once_with(deploy.MAX_ARCHIVE + 1)
+
+    def test_invalid_commit_is_rejected_before_network_access(self):
+        with patch.object(deploy.urllib.request, 'urlopen') as fetch:
+            for commit in ('', 'a' * 39, 'a' * 41, 'A' * 40, 'g' * 40, 'a' * 40 + '\n', '../master', 'a' * 40 + '?repo=other'):
+                with self.subTest(commit=commit), self.assertRaisesRegex(ValueError, '40-character commit SHA'):
+                    deploy.download_archive(commit)
+            fetch.assert_not_called()
+
+    def test_oversized_download_is_rejected(self):
+        with patch.object(deploy, 'MAX_ARCHIVE', 8), patch.object(deploy.urllib.request, 'urlopen') as fetch:
+            response = fetch.return_value.__enter__.return_value
+            response.read.return_value = b'x' * 9
+            with self.assertRaisesRegex(ValueError, 'Archive exceeds size limit'):
+                deploy.download_archive('a' * 40)
+            response.read.assert_called_once_with(9)
+
+
 class ArchiveTests(unittest.TestCase):
     def test_only_runtime_is_published(self):
         with tempfile.TemporaryDirectory() as temporary:
