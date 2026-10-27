@@ -7,6 +7,12 @@ const CALLBACKS = new Set([
 ]);
 const RETURNS = new Set(["#overview", "#exhibits", "#labels", "#activity", "#reports", "#staff"]);
 
+export function base64url(bytes) {
+  const encoded = btoa(String.fromCharCode(...bytes));
+  const padding = encoded.indexOf("=");
+  return (padding === -1 ? encoded : encoded.slice(0, padding)).replaceAll("+", "-").replaceAll("/", "_");
+}
+
 export function safeReturnHash(value) {
   return RETURNS.has(value) ? value : "#staff";
 }
@@ -96,9 +102,6 @@ export function createStaffSession(runtime = {}) {
   function random() {
     const bytes = crypto.getRandomValues(new Uint8Array(32));
     return base64url(bytes);
-  }
-  function base64url(bytes) {
-    return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   }
   async function startSignIn(returnHash = "#staff") {
     if (["signing_in", "signing_out"].includes(state.status)) return;

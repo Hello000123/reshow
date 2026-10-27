@@ -22,6 +22,15 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        id: lambda-python
+        with:
+          python-version: '3.12'
+      - name: Verify the production Lambda API on Python 3.12
+        run: '"${{ steps.lambda-python.outputs.python-path }}" -m unittest checks.api_test.ApiTests'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
       - run: npm run check && npm test && python3 -m unittest discover -s checks -p '*_test.py' && npm run build && python3 scripts/preflight.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

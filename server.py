@@ -6,7 +6,7 @@ from email import policy
 from email.message import Message
 from email.parser import BytesParser
 from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from urllib.error import HTTPError
@@ -314,9 +314,15 @@ def main():
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(certfile=args.cert_file, keyfile=args.key_file)
-    server = ThreadingHTTPServer((args.bind, args.port), partial(StudioHandler, directory=args.directory))
     try:
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        from http.server import ThreadingHTTPSServer
+    except ImportError as error:
+        raise SystemExit("Local HTTPS hosting requires Python 3.14 or later; the Lambda API supports Python 3.12.") from error
+    server = ThreadingHTTPSServer(
+        (args.bind, args.port), partial(StudioHandler, directory=args.directory),
+        certfile=args.cert_file, keyfile=args.key_file,
+    )
+    try:
         print(
             "ReShow HTTPS is listening on " + args.bind + ":" + str(server.server_port),
             flush=True,

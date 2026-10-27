@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
-import { createStaffSession, safeReturnHash } from "../js/auth-session.js";
+import { createStaffSession, safeReturnHash, base64url } from "../js/auth-session.js";
 const ORIGIN = "https://dkbznu9f5nh9n.cloudfront.net";
 const CONFIG = {
   client_id: "publicclient123", issuer: "https://cognito-idp.us-east-1.amazonaws.com/unit",
@@ -257,4 +257,12 @@ test("a sign-out during the token exchange cannot restore a stale callback sessi
   assert.ok(!h.calls.some(({ url }) => url.endsWith("/staff-api/session")));
   await assert.rejects(h.session.request("/accounts"), (error) => error.status === 401);
   h.session.dispose();
+});
+
+
+test("base64url preserves binary bytes and trims padding in a single linear pass", () => {
+  for (const length of [0, 1, 2, 3, 32, 32768]) {
+    const bytes = Uint8Array.from({ length }, (_, index) => index % 256);
+    assert.equal(base64url(bytes), Buffer.from(bytes).toString("base64url"));
+  }
 });

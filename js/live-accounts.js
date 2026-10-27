@@ -1,5 +1,5 @@
 import { staffSession } from "./auth-session.js";
-import { esc } from "./ui.js";
+import { esc, reportError } from "./ui.js";
 
 const ROLES = ["Administrator", "Operator", "Viewer"];
 const id = (prefix) => prefix + "-" + crypto.randomUUID();
@@ -27,7 +27,7 @@ export async function initializeStaffLogin() {
   }
   staffSession.subscribe(update);
   update(staffSession.snapshot());
-  button.onclick = () => { location.hash = "#staff"; if (!staffSession.snapshot().user) startLogin(); };
+  button.onclick = () => { location.hash = "#staff"; if (!staffSession.snapshot().user) startLogin().catch(reportError); };
   if (location.pathname === "/auth/callback.html") document.querySelector("#page-content").innerHTML = '<div class="card empty" role="status">Completing secure staff sign-in…</div>';
   try { await staffSession.completeCallback(); }
   catch (_error) { /* The Staff tab explains cancelled/invalid/expired callbacks. */ }
@@ -125,7 +125,7 @@ export async function renderLiveAccounts(container) {
           button.textContent = "Retry the same invitation request";
           throw new Error(errorText(error) + " The original staff/invitation IDs are retained for this form. Refresh records before retrying if the result was ambiguous.");
         }
-      });
+      }).catch(reportError);
     };
   }
   function drawEditor(person, account) {
@@ -160,7 +160,7 @@ export async function renderLiveAccounts(container) {
     editor.querySelector("form").onsubmit = (event) => {
       event.preventDefault();
       const button = event.currentTarget.querySelector("button");
-      run(button, () => update({ role: new FormData(event.currentTarget).get("role") }));
+      run(button, () => update({ role: new FormData(event.currentTarget).get("role") })).catch(reportError);
     };
     const toggle = editor.querySelector("[data-toggle]");
     if (toggle) toggle.onclick = () => run(toggle, () => update({ status: account.status === "disabled" ? "active" : "disabled" }));
@@ -216,7 +216,7 @@ export async function renderLiveAccounts(container) {
       reload.textContent = "Load live accounts";
       reload.onclick = () => run(reload, loadAdmin);
       content.append(reload);
-      loadAdmin();
+      loadAdmin().catch(reportError);
     }
   }
   const unsubscribe = staffSession.subscribe(drawSession);
