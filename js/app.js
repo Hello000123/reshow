@@ -14,6 +14,7 @@ import { render as labels } from "./pages/labels.js";
 import { render as activity } from "./pages/activity.js";
 import { render as reports } from "./pages/reports.js";
 import { render as staff } from "./pages/staff.js";
+import { render as technologyShowcase } from "./pages/technology-showcase.js";
 const pages = {
   overview: {
     title: "Showcase overview",
@@ -50,6 +51,12 @@ const pages = {
     subtitle: "Manage staff permissions and showcase access cards",
     icon: "users",
     render: staff,
+  },
+  technology: {
+    title: "3D & AI studio",
+    subtitle: "Preview 3D models and generate exhibit details from an image",
+    icon: "cube",
+    render: technologyShowcase,
   },
 };
 let current = "overview",
