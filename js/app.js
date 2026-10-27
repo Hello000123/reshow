@@ -7,6 +7,8 @@ import {
   showDialog,
   confirmAction,
   toast,
+  reportError,
+  handleAction,
 } from "./ui.js";
 import { render as overview } from "./pages/overview.js";
 import { render as exhibits } from "./pages/exhibits.js";
@@ -73,16 +75,16 @@ document.querySelector("#navigation").innerHTML = Object.entries(pages)
   .join("");
 document.querySelector("#report-shortcut").innerHTML =
   icon("report") + "Generate report";
-document.querySelector("#report-shortcut").onclick = () => navigate("reports");
+document.querySelector("#report-shortcut").onclick = () => navigate("reports").catch(reportError);
 document.querySelectorAll("[data-page]").forEach((a) =>
   a.addEventListener("click", (e) => {
     e.preventDefault();
-    navigate(a.dataset.page);
+    navigate(a.dataset.page).catch(reportError);
   }),
 );
 document.querySelector(".brand").onclick = (e) => {
   e.preventDefault();
-  navigate("overview");
+  navigate("overview").catch(reportError);
 };
 async function canLeave() {
   return (
@@ -172,7 +174,7 @@ function updateBanner(snap) {
     ? `<div class="notice ${mode === "offline" || mode === "failed" ? "warning" : "info"}">${icon("info")}${esc(message)}</div>`
     : "";
 }
-document.querySelector("#demo-controls").onclick = async () => {
+document.querySelector("#demo-controls").onclick = handleAction(async () => {
   const snap = await api.getSnapshot();
   const mode = api.getDemoMode();
   const choices = [
@@ -187,20 +189,20 @@ document.querySelector("#demo-controls").onclick = async () => {
     "Development / demo controls",
     `<p>All readings, scans, permissions and device responses are simulated.</p><div class="demo-mode-grid">${choices.map(([value, title, description]) => `<label class="demo-mode-option"><input type="radio" name="mode" value="${value}" ${value === mode ? "checked" : ""}>${title}<small>${description}</small></label>`).join("")}</div><p class="demo-clock">Demo clock: ${esc(formatDate(snap.now))}, ${esc(formatTime(snap.now))}. Sample exhibition hours: 09:00–17:00 HKT. The clock is fixed and advances for demo operations.</p><div class="actions"><button class="button" data-settle>Acknowledge pending</button><button class="button danger" data-reset>Reset demo records</button><button class="button primary" data-apply>Apply scenario</button></div>`,
     (d) => {
-      d.querySelector("[data-apply]").onclick = async () => {
+      d.querySelector("[data-apply]").onclick = handleAction(async () => {
         if (!(await canLeave())) return;
         dirty = false;
         await api.setDemoMode(d.querySelector("[name=mode]:checked").value);
         d.close();
-        refresh();
-      };
-      d.querySelector("[data-settle]").onclick = async () => {
+        await refresh();
+      });
+      d.querySelector("[data-settle]").onclick = handleAction(async () => {
         await api.settlePending();
         toast("Pending demo commands processed.");
         d.close();
-        if (!dirty) refresh();
-      };
-      d.querySelector("[data-reset]").onclick = async () => {
+        if (!dirty) await refresh();
+      });
+      d.querySelector("[data-reset]").onclick = handleAction(async () => {
         if (
           await confirmAction(
             "Reset demo records?",
@@ -211,12 +213,12 @@ document.querySelector("#demo-controls").onclick = async () => {
           dirty = false;
           await api.resetDemo();
           d.close();
-          refresh();
+          await refresh();
         }
-      };
+      });
     },
   );
-};
+});
 window.addEventListener("beforeunload", (e) => {
   if (dirty) {
     e.preventDefault();
@@ -224,13 +226,16 @@ window.addEventListener("beforeunload", (e) => {
   }
 });
 // Keep the demo clock and storage warnings current without replacing page editors.
-api.subscribe(async () => {
+api.subscribe(() => {
+  updateHeader().catch(reportError);
+});
+async function updateHeader() {
   const snapshot = await api.getSnapshot();
   updateBanner(snapshot);
   document.querySelector("#demo-date").textContent =
     `${formatDate(snapshot.now)} · Demo clock`;
-});
-window.addEventListener("popstate", async (e) => {
+}
+window.addEventListener("popstate", handleAction(async (e) => {
   const target = e.state?.tab || location.hash.slice(1);
   if (!(await canLeave())) {
     history.pushState({ tab: current, params }, "", `#${current}`);
@@ -239,11 +244,11 @@ window.addEventListener("popstate", async (e) => {
   dirty = false;
   current = pages[target] ? target : "overview";
   params = e.state?.params || {};
-  refresh();
-});
+  await refresh();
+}));
 // Keep external hash links useful without bypassing the unsaved-edits guard.
 window.addEventListener("hashchange", () => {
   const target = location.hash.slice(1);
-  if (pages[target] && target !== current) navigate(target, {}, true);
+  if (pages[target] && target !== current) navigate(target, {}, true).catch(reportError);
 });
-navigate(location.hash.slice(1) || "overview", {}, true);
+navigate(location.hash.slice(1) || "overview", {}, true).catch(reportError);

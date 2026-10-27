@@ -6,6 +6,7 @@ import {
   dateKey,
   badge,
   toast,
+  reportError,
   statusStrip,
   metric,
   heatmap,
@@ -96,7 +97,7 @@ export async function render(container, ctx) {
     );
     container.querySelector("[data-period]").onchange = (event) => {
       period = event.target.value;
-      draw();
+      draw().catch(reportError);
     };
     container.querySelectorAll("[data-mode]").forEach(
       (button) =>

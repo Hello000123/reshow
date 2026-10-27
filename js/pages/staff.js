@@ -5,6 +5,7 @@ import {
   formatDate,
   badge,
   toast,
+  reportError,
   confirmAction,
   showDialog,
 } from "../ui.js";
@@ -214,7 +215,7 @@ export async function render(container, ctx) {
         dialog.close = requestClose;
         dialog.addEventListener("cancel", (event) => {
           event.preventDefault();
-          requestClose();
+          requestClose().catch(reportError);
         });
         dialog.addEventListener(
           "close",
