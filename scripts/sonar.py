@@ -11,6 +11,8 @@ import base64
 
 HOST = 'http://127.0.0.1:9000'
 PROJECT = 'reshow'
+GATE_NAME = 'ReShow overall zero issues'
+GATE_METRICS = ('bugs', 'vulnerabilities', 'code_smells')
 
 
 def api(path, parameters=None, credentials=None):
@@ -38,10 +40,29 @@ def bootstrap():
     api('users/change_password', {'login': 'admin', 'previousPassword': 'admin', 'password': password}, 'admin:admin')
     credentials = 'admin:' + password
     api('projects/create', {'project': PROJECT, 'name': 'ReShow EE3070'}, credentials)
+    configure_gate(credentials)
     token = api('user_tokens/generate', {'name': 'github-run'}, credentials)['token']
     print('::add-mask::' + token, flush=True)
     with open(os.environ['GITHUB_ENV'], 'a') as output:
         output.write('SONAR_TOKEN=' + token + '\n')
+
+
+def configure_gate(credentials):
+    api('qualitygates/create', {'name': GATE_NAME}, credentials)
+    for metric in GATE_METRICS:
+        api('qualitygates/create_condition', {'gateName': GATE_NAME, 'metric': metric, 'op': 'GT', 'error': '0'}, credentials)
+    api('qualitygates/select', {'gateName': GATE_NAME, 'projectKey': PROJECT}, credentials)
+
+
+def validate_gate(gate):
+    status = gate['projectStatus']
+    conditions = status.get('conditions', [])
+    expected = {metric: ('GT', '0') for metric in GATE_METRICS}
+    actual = {condition['metricKey']: (condition.get('comparator'), condition.get('errorThreshold')) for condition in conditions}
+    if actual != expected or status.get('ignoredConditions'):
+        raise RuntimeError('SonarQube overall gate conditions missing, changed or ignored')
+    if status['status'] != 'OK' or any(condition.get('status') != 'OK' for condition in conditions):
+        raise RuntimeError('SonarQube quality gate: ' + status['status'])
 
 
 def report():
@@ -77,9 +98,7 @@ def report():
 
 
 def enforce():
-    status = json.loads(Path('sonar-report/quality-gate.json').read_text())['projectStatus']['status']
-    if status != 'OK':
-        raise RuntimeError('SonarQube quality gate: ' + status)
+    validate_gate(json.loads(Path('sonar-report/quality-gate.json').read_text()))
 
 
 if __name__ == '__main__':

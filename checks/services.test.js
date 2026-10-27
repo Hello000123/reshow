@@ -28,3 +28,11 @@ test('staff rejects invalid email before saving', async () => {
 test('display escaping treats HTML as text', () => {
   assert.equal(esc('<img src="x" onerror=\'alert(1)\'>&'), '&lt;img src=&quot;x&quot; onerror=&#39;alert(1)&#39;&gt;&amp;');
 });
+
+test('staff email validation accepts normal addresses and rejects malformed boundaries', async () => {
+  for (const email of ['a@@b.com', '@b.com', 'a@.com', 'a@b.', 'a b@c.com', 'a@b', 'a@b. c']) {
+    await assert.rejects(saveStaff({ name: 'Validation test', email, role: 'Viewer' }), /valid email/);
+  }
+  const saved = await saveStaff({ name: 'Validation test', email: 'valid+tag@example.com', role: 'Viewer' });
+  assert.equal(saved.email, 'valid+tag@example.com');
+});

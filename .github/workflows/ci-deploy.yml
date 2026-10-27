@@ -99,6 +99,13 @@ jobs:
           AI_BASE_URL: https://18.163.201.242/ica/harry/v1
           AI_MODEL: ${{ vars.AI_MODEL || 'claude-sonnet-5-5' }}
         run: python3 scripts/ai-review.py
+      - name: Record review job failure
+        if: failure()
+        run: |
+          mkdir -p sonar-report
+          if [ ! -f sonar-report/ai-review.md ]; then
+            echo 'AI review could not run because a prerequisite failed. See the failed job step; deployment is blocked.' > sonar-report/ai-review.md
+          fi
       - name: Preserve advisory review
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
