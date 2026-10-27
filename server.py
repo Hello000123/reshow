@@ -107,12 +107,17 @@ def create_exhibit_name(description):
         first_sentence,
         flags=re.IGNORECASE,
     )
-    name = re.split(
-        r"\s+(that|which|with|characterized by)\s+",
-        first_sentence,
-        maxsplit=1,
-        flags=re.IGNORECASE,
-    )[0].strip(" \t\n\r.,:;\"'")
+    previous_end = 0
+    for word in re.finditer(r"\S+", first_sentence):
+        starts_clause = word.group().lower() in ("that", "which", "with")
+        if word.group().lower() == "characterized":
+            following = first_sentence[word.end():word.end() + 4]
+            starts_clause = len(following) == 4 and following[:3].lower() == " by" and following[3].isspace()
+        if starts_clause and word.start() > 0 and word.end() < len(first_sentence):
+            first_sentence = first_sentence[:previous_end]
+            break
+        previous_end = word.end()
+    name = first_sentence.strip(" \t\n\r.,:;\"'")
     name = re.sub(r"^(a|an|the)\s+", "", name, flags=re.IGNORECASE)
     return name[:1].upper() + name[1:] if name else "Image-based exhibit"
 
@@ -305,7 +310,7 @@ def main():
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.bind, args.port), partial(StudioHandler, directory=args.directory))
     print(
-        "ReShow is available at http://"
+        "ReShow is listening on "
         + args.bind
         + ":"
         + str(args.port),

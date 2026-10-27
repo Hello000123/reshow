@@ -7,6 +7,8 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import threading
 import unittest
 from unittest.mock import patch
@@ -58,6 +60,42 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(token, TOKEN)
         self.assertEqual(bytes(payload["image"]), IMAGE)
         self.assertNotEqual(payload["prompt"], "agree")
+
+    def test_exhibit_names_preserve_sentence_prefix_and_clause_boundaries(self):
+        cases = {
+            "The image shows a bronze helmet with a crest.": "Bronze helmet",
+            "An ornate vase THAT has a lid. Another sentence.": "Ornate vase",
+            "The image features an ancient urn characterized by blue glazing.": "Ancient urn",
+            "A model characterized  by blue glazing.": "Model characterized  by blue glazing",
+            "A metal artifact, which has scratches.": "Metal artifact",
+            "The image depicts a wooden box. It is old.": "Wooden box",
+            "An artifact with": "Artifact with",
+            "A helmet characterized by": "Helmet characterized by",
+            "Artifact\u2003with details": "Artifact",
+            "with a rim": "With a rim",
+            " with a rim": "Image-based exhibit",
+            "": "Image-based exhibit",
+        }
+        for description, expected in cases.items():
+            with self.subTest(description=description):
+                self.assertEqual(server.create_exhibit_name(description), expected)
+
+    def test_exhibit_name_parsing_finishes_on_long_whitespace_without_a_clause(self):
+        # The former unanchored whitespace regex retried the entire whitespace
+        # suffix at each position when no clause followed it (quadratic work).
+        subprocess.run([sys.executable, "-c", (
+            'import server; description="Artifact" + " " * 200000 + "remainder"; '
+            'assert server.create_exhibit_name(description) == description'
+        )], check=True, timeout=5)
+
+    def test_local_startup_reports_bind_address_without_claiming_a_protocol(self):
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["server.py"]), patch.object(server, "ThreadingHTTPServer") as httpd, redirect_stdout(output):
+            httpd.return_value.serve_forever.side_effect = KeyboardInterrupt
+            server.main()
+        self.assertIn("ReShow is listening on 127.0.0.1:8000", output.getvalue())
+        self.assertNotIn("://", output.getvalue())
+        httpd.return_value.server_close.assert_called_once()
 
     def test_invalid_uploads_fail_before_any_outbound_request(self):
         cases = [(multipart(account="../outside"), 400),
