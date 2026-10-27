@@ -1,6 +1,9 @@
 """An ephemeral scan must evaluate explicit overall conditions, never an empty gate."""
 import copy
 import importlib.util
+import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -17,6 +20,18 @@ def passing_gate():
 
 
 class GateTests(unittest.TestCase):
+    def test_password_composition_does_not_depend_on_random_character_classes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = str(Path(temporary) / 'environment')
+            with patch.object(sonar.secrets, 'token_urlsafe', return_value='a' * 43), patch.object(sonar, 'print'), patch.dict(os.environ, {'GITHUB_ENV': environment}), patch.object(sonar, 'api') as api:
+                api.side_effect = lambda path, *args: {'status': 'UP'} if path == 'system/status' else {'token': 'masked-token'}
+                sonar.bootstrap()
+            password = next(call.args[1]['password'] for call in api.call_args_list if call.args[0] == 'users/change_password')
+            self.assertGreaterEqual(len(password), 32)
+            for pattern in (r'[a-z]', r'[A-Z]', r'[0-9]', r'[^a-zA-Z0-9]'):
+                self.assertRegex(password, pattern)
+            self.assertNotIn(password, Path(environment).read_text())
+
     def test_bootstrap_creates_and_selects_overall_zero_issue_conditions(self):
         with patch.object(sonar, 'api') as api:
             sonar.configure_gate('test-credential')
