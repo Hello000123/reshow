@@ -50,6 +50,7 @@ The fixed demonstration clock starts on **6 October 2026 at 13:20 HKT**, matchin
 ```text
 index.html              App shell and seven-tab navigation
 server.py               One Python 3 server for static files and showcase API
+BACKEND_ASSET_UPLOAD.md  Backend contract proposal for exhibit .glb and .jpg assets
 css/styles.css          Shared desktop components and print rules
 css/exhibits.css         Exhibit and label layouts
 css/staff.css            Staff directory and card registration layout
