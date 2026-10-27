@@ -35,7 +35,7 @@ def bootstrap():
         time.sleep(5)
     else:
         raise RuntimeError('SonarQube did not become ready within 10 minutes')
-    password = secrets.token_urlsafe(32)
+    password = 'Aa1!' + secrets.token_urlsafe(32)
     print('::add-mask::' + password, flush=True)
     api('users/change_password', {'login': 'admin', 'previousPassword': 'admin', 'password': password}, 'admin:admin')
     credentials = 'admin:' + password
