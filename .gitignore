@@ -1,0 +1,24 @@
+# Local secrets and environment settings
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies, caches and local logs
+node_modules/
+__pycache__/
+*.log
+.DS_Store
+Thumbs.db
+
+# Local development material; not required to run the website
+/Reference Picture/
+/AGENT.md
+/AGENTS.md
+/BACKEND_HANDOFF.md
+/CONTRACT.md
+/PROJECT_CHECKPOINT.md
+/VERIFICATION.md
+/tests/
+/verification/

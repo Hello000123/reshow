@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#008b8d" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      name="description"
+      content="ReShow showcase demonstration with live staff website sign-in and account administration."
+    />
+    <title>ReShow · Showcase overview</title>
+    <link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="css/styles.css" />
+    <link rel="stylesheet" href="css/exhibits.css" />
+    <link rel="stylesheet" href="css/staff.css" />
+    <link rel="stylesheet" href="css/accounts.css" />
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body>
+    <a href="#main" class="skip-link">Skip to content</a>
+    <aside class="sidebar" aria-label="Main navigation">
+      <a class="brand" href="#overview"
+        ><img src="assets/logo.svg" alt="" /><span
+          >ReShow<small>Smart showcase</small></span
+        ></a
+      >
+      <nav id="navigation" aria-label="Dashboard tabs"></nav>
+      <div class="sidebar-bottom">
+        <span class="muted">Prototype · Case 01</span
+        ><button class="demo-button" id="demo-controls">
+          Demo controls <span aria-hidden="true">↗</span>
+        </button>
+        <div class="staff-identity">
+          <span class="avatar">JS</span
+          ><span>Exhibition staff<small>Demonstration session</small></span>
+        </div>
+      </div>
+    </aside>
+    <main id="main" tabindex="-1">
+      <header class="page-header">
+        <div>
+          <div class="title-line">
+            <h1 id="page-title">Showcase overview</h1>
+            <span class="badge demo">Local showcase demo</span>
+          </div>
+          <p id="page-subtitle">Case 01 / School exhibition</p>
+        </div>
+        <div class="header-actions">
+          <button id="staff-sign-in" class="button">Staff sign in</button>
+          <span id="demo-date"></span
+          ><button id="report-shortcut" class="button">Generate report</button>
+        </div>
+      </header>
+      <div id="scenario-banner" hidden></div>
+      <div id="page-content" aria-live="off"></div>
+      <footer class="page-footer">
+        ReShow prototype
+        <span
+          >Local showcase demo · Live website accounts in Staff access · HKT (UTC+8)</span
+        >
+      </footer>
+    </main>
+    <div
+      id="toast-region"
+      class="toast-region"
+      role="status"
+      aria-live="polite"
+    ></div>
+  </body>
+</html>
