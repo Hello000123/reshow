@@ -70,7 +70,7 @@ def point_current(target):
 def download_archive(commit):
     if not re.fullmatch('[0-9a-f]{40}', commit):
         raise ValueError('Expected exactly one lowercase 40-character commit SHA')
-    with urllib.request.urlopen('https://codeload.github.com/Hello000123/reshow/tar.gz/' + commit, timeout=60) as response:
+    with urllib.request.urlopen('https://codeload.github.com/ee3070-team/reshow/tar.gz/' + commit, timeout=60) as response:
         archive = response.read(MAX_ARCHIVE + 1)
     if len(archive) > MAX_ARCHIVE:
         raise ValueError('Archive exceeds size limit')
