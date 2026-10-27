@@ -22,3 +22,8 @@ Thumbs.db
 /VERIFICATION.md
 /tests/
 /verification/
+
+# CI output
+/dist/
+/sonar-report/
+/.scannerwork/
