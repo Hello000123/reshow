@@ -149,6 +149,8 @@ jobs:
         env:
           DEPLOY_SHA: ${{ github.sha }}
         run: bash scripts/deploy-static.sh "$DEPLOY_SHA" validate
+      - name: Verify and stamp the exact existing manual auth release when needed
+        run: bash scripts/deploy-static.sh 03ce9a0e269337055388d45a04d52cdae411c072 adopt
       - name: Stage and verify the exact API version without changing live traffic
         id: api-stage
         env:

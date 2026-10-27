@@ -7,6 +7,7 @@ action=${2:-deploy}
 case "$action" in
   deploy) document=EE3070-ReShow-DeployFrontend ;;
   validate) document=EE3070-ReShow-ValidateFrontend ;;
+  adopt) document=EE3070-ReShow-AdoptFrontend ;;
   *) echo 'Unknown deployment action'; exit 1 ;;
 esac
 

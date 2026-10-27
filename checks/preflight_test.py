@@ -36,7 +36,7 @@ def archive(files):
 
 class PreflightTests(unittest.TestCase):
     def test_real_extractor_rejects_an_unsupported_committed_asset_before_deploy(self):
-        files = {'index.html': b'home', 'js/app.js': b'code', 'assets/model.glb': b'glTF'}
+        files = {'index.html': b'home', 'auth/callback.html': b'callback', 'js/app.js': b'code', 'assets/model.glb': b'glTF'}
         with tempfile.TemporaryDirectory() as temporary:
             built = Path(temporary)
             for name, value in files.items():
@@ -171,6 +171,17 @@ class PreflightTests(unittest.TestCase):
         self.assertNotIn('ForwardedValues', behavior)
         self.assertEqual(config['DefaultCacheBehavior']['TargetOriginId'], 'ExistingEC2')
         self.assertEqual(config['DefaultCacheBehavior']['AllowedMethods'], ['GET', 'HEAD'])
+        default = config['DefaultCacheBehavior']
+        self.assertEqual([default[key] for key in ('MinTTL', 'DefaultTTL', 'MaxTTL')], [0, 0, 0])
+        for path in ('auth/callback.html', 'index.html', 'js/*'):
+            auth = next(item for item in config['CacheBehaviors'] if item['PathPattern'] == path)
+            self.assertEqual(auth['TargetOriginId'], 'ExistingEC2')
+            self.assertEqual(auth['CachePolicyId'], '4135ea2d-6df8-44a3-9df3-4b5a84be39ad')
+            self.assertNotIn('OriginRequestPolicyId', auth)
+            self.assertNotIn('ForwardedValues', auth)
+        headers = frontend['FrontendResponseHeaders']['Properties']['ResponseHeadersPolicyConfig']['SecurityHeadersConfig']
+        self.assertEqual(headers['ReferrerPolicy'], {'ReferrerPolicy': 'no-referrer', 'Override': True})
+        self.assertNotIn('Logging', config)
         studio = json.loads(Path('infra/studio-api.json').read_text())['Resources']
         self.assertEqual(studio['ApiUrl']['Properties']['AuthType'], 'AWS_IAM')
         self.assertEqual(studio['ApiOriginAccessControl']['Properties']['OriginAccessControlConfig']['SigningBehavior'], 'always')

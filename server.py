@@ -1,6 +1,7 @@
 import argparse
 import json
 import re
+import ssl
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
@@ -307,16 +308,19 @@ def main():
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--directory", default=str(ROOT))
+    parser.add_argument("--cert-file", required=True, help="PEM certificate chain for local HTTPS")
+    parser.add_argument("--key-file", required=True, help="PEM private key for the certificate")
     args = parser.parse_args()
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(certfile=args.cert_file, keyfile=args.key_file)
     server = ThreadingHTTPServer((args.bind, args.port), partial(StudioHandler, directory=args.directory))
-    print(
-        "ReShow is listening on "
-        + args.bind
-        + ":"
-        + str(args.port),
-        flush=True,
-    )
     try:
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        print(
+            "ReShow HTTPS is listening on " + args.bind + ":" + str(server.server_port),
+            flush=True,
+        )
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopping ReShow server.", flush=True)

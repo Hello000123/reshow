@@ -1,4 +1,5 @@
 import { api } from "./services.js";
+import { initializeStaffLogin } from "./live-accounts.js";
 import {
   icon,
   esc,
@@ -251,4 +252,6 @@ window.addEventListener("hashchange", () => {
   const target = location.hash.slice(1);
   if (pages[target] && target !== current) navigate(target, {}, true).catch(reportError);
 });
-navigate(location.hash.slice(1) || "overview", {}, true).catch(reportError);
+initializeStaffLogin()
+  .then(() => navigate(location.hash.slice(1) || "overview", {}, true))
+  .catch(reportError);

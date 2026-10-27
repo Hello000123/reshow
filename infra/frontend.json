@@ -76,7 +76,7 @@
               "Override": true
             },
             "ReferrerPolicy": {
-              "ReferrerPolicy": "strict-origin-when-cross-origin",
+              "ReferrerPolicy": "no-referrer",
               "Override": true
             },
             "StrictTransportSecurity": {
@@ -146,8 +146,8 @@
             ],
             "Compress": true,
             "MinTTL": 0,
-            "DefaultTTL": 60,
-            "MaxTTL": 300,
+            "DefaultTTL": 0,
+            "MaxTTL": 0,
             "ForwardedValues": {
               "QueryString": false,
               "Cookies": {
@@ -203,6 +203,60 @@
               },
               "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
               "OriginRequestPolicyId": "b689b0a8-53d0-40ab-baf2-68738e2966ac"
+            },
+            {
+              "PathPattern": "auth/callback.html",
+              "TargetOriginId": "ExistingEC2",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "Compress": true,
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "ResponseHeadersPolicyId": {
+                "Ref": "FrontendResponseHeaders"
+              }
+            },
+            {
+              "PathPattern": "index.html",
+              "TargetOriginId": "ExistingEC2",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "Compress": true,
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "ResponseHeadersPolicyId": {
+                "Ref": "FrontendResponseHeaders"
+              }
+            },
+            {
+              "PathPattern": "js/*",
+              "TargetOriginId": "ExistingEC2",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "Compress": true,
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "ResponseHeadersPolicyId": {
+                "Ref": "FrontendResponseHeaders"
+              }
             }
           ]
         },

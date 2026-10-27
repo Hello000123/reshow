@@ -5,6 +5,8 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import json
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('deploy', 'deploy/reshow-deploy.py')
 deploy = importlib.util.module_from_spec(spec)
@@ -26,8 +28,8 @@ class ArchiveTests(unittest.TestCase):
     def test_only_runtime_is_published(self):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary)
-            deploy.extract_runtime(archive([('repo/.env', b'secret', tarfile.REGTYPE), ('repo/assets/model.glb', b'glTF', tarfile.REGTYPE)]), destination)
-            self.assertEqual(sorted(str(p.relative_to(destination)) for p in destination.rglob('*') if p.is_file()), ['assets/model.glb', 'index.html', 'js/app.js'])
+            deploy.extract_runtime(archive([('repo/.env', b'secret', tarfile.REGTYPE), ('repo/assets/model.glb', b'glTF', tarfile.REGTYPE), ('repo/auth/callback.html', b'callback', tarfile.REGTYPE), ('repo/auth/private.html', b'not published', tarfile.REGTYPE), ('repo/auth/private.py', b'not published', tarfile.REGTYPE)]), destination)
+            self.assertEqual(sorted(str(p.relative_to(destination)) for p in destination.rglob('*') if p.is_file()), ['assets/model.glb', 'auth/callback.html', 'index.html', 'js/app.js'])
 
     def test_unsupported_runtime_file_reports_path_and_reason(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -55,6 +57,70 @@ class ArchiveTests(unittest.TestCase):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
                 with self.assertRaises(ValueError):
                     deploy.extract_runtime(archive([(name, b'', kind)]), Path(temporary))
+
+
+class LegacyAdoptionTests(unittest.TestCase):
+    def setup_release(self, root, commit):
+        release = root / 'releases' / commit
+        public = release / 'public'
+        (public / 'js').mkdir(parents=True)
+        (public / 'index.html').write_bytes(b'home')
+        (public / 'js/app.js').write_bytes(b'code')
+        (root / 'current').symlink_to(release)
+        return public
+
+    def test_adoption_requires_exact_installed_hashes_without_switch_or_restart(self):
+        commit = 'a' * 40
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            public = self.setup_release(root, commit)
+            with patch.object(deploy, 'ROOT', root), patch.object(deploy, 'download_archive', return_value=archive()), patch.object(deploy, 'point_current') as switch, patch.object(deploy.subprocess, 'run') as restart:
+                deploy.adopt(commit)
+                self.assertEqual(json.loads((public / 'release.json').read_text()), {'commit': commit})
+                switch.assert_not_called()
+                restart.assert_not_called()
+
+    def test_normal_stamped_release_is_no_op_but_mismatched_stamp_fails(self):
+        commit = 'b' * 40
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            public = self.setup_release(root, commit)
+            stamp = public / 'release.json'
+            stamp.write_text(json.dumps({'commit': commit}))
+            with patch.object(deploy, 'ROOT', root), patch.object(deploy, 'download_archive') as download:
+                deploy.adopt('a' * 40)
+                download.assert_not_called()
+                stamp.write_text(json.dumps({'commit': 'c' * 40}))
+                with self.assertRaisesRegex(ValueError, 'stamp differs'):
+                    deploy.adopt('a' * 40)
+
+    def test_adoption_rejects_wrong_release_changed_or_extra_files_and_symlinks(self):
+        commit = 'a' * 40
+        for kind in ('wrong-release', 'changed', 'extra', 'symlink'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                public = self.setup_release(root, 'b' * 40 if kind == 'wrong-release' else commit)
+                if kind == 'changed':
+                    (public / 'js/app.js').write_bytes(b'changed')
+                if kind == 'extra':
+                    (public / 'private.txt').write_text('not allowed')
+                if kind == 'symlink':
+                    (public / 'link.js').symlink_to(public / 'js/app.js')
+                with patch.object(deploy, 'ROOT', root), patch.object(deploy, 'download_archive', return_value=archive()):
+                    with self.assertRaises(ValueError):
+                        deploy.adopt(commit)
+                self.assertFalse((public / 'release.json').exists())
+
+    def test_adoption_rejects_current_outside_the_managed_releases(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            foreign = root / ('a' * 40)
+            foreign.mkdir()
+            (root / 'current').symlink_to(foreign)
+            with patch.object(deploy, 'ROOT', root), patch.object(deploy, 'download_archive') as download:
+                with self.assertRaisesRegex(ValueError, 'outside the managed'):
+                    deploy.adopt('a' * 40)
+                download.assert_not_called()
 
 
 if __name__ == '__main__':

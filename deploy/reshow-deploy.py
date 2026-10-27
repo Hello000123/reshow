@@ -3,6 +3,7 @@
 import io
 import gzip
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -34,7 +35,7 @@ def extract_runtime(archive, destination):
                 raise ValueError('Absolute archive path')
             parts = PurePosixPath(member.name).parts
             relative = PurePosixPath(*parts[1:])
-            selected = str(relative) == 'index.html' or (relative.parts and relative.parts[0] in ('css', 'js', 'assets'))
+            selected = str(relative) in ('index.html', 'auth/callback.html') or (relative.parts and relative.parts[0] in ('css', 'js', 'assets'))
             if not selected or member.isdir():
                 continue
             if not member.isfile():
@@ -81,6 +82,58 @@ def validate(commit):
     with tempfile.TemporaryDirectory(prefix='reshow-validate-') as temporary:
         extract_runtime(archive, Path(temporary))
     print('Validated ReShow runtime archive ' + commit)
+
+
+def runtime_hashes(public):
+    result = {}
+    for path in public.rglob('*'):
+        if path.is_symlink():
+            raise ValueError('The installed runtime contains a symbolic link')
+        if path.is_file() and path != public / 'release.json':
+            result[str(path.relative_to(public))] = hashlib.sha256(path.read_bytes()).hexdigest()
+        elif not path.is_dir() and path != public / 'release.json':
+            raise ValueError('The installed runtime contains a non-regular file')
+    return result
+
+
+def adopt(commit):
+    """Stamp an exact existing legacy release after the workflow gates pass."""
+    if not re.fullmatch('[0-9a-f]{40}', commit):
+        raise ValueError('Expected a lowercase 40-character legacy commit SHA')
+    with (ROOT / '.deploy.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        current = ROOT / 'current'
+        if not current.is_symlink():
+            raise ValueError('The current release is not a managed symbolic link')
+        target = current.resolve(strict=True)
+        if target.parent != (ROOT / 'releases').resolve() or not re.fullmatch('[0-9a-f]{40}', target.name):
+            raise ValueError('The current release is outside the managed releases directory')
+        public = target / 'public'
+        stamp = public / 'release.json'
+        if public.is_symlink() or stamp.is_symlink():
+            raise ValueError('The current release has an unsafe public directory or stamp')
+        if stamp.exists():
+            if json.loads(stamp.read_text()) != {'commit': target.name}:
+                raise ValueError('The existing release stamp differs from its directory')
+            print('Current ReShow release already has valid metadata ' + target.name)
+            return
+        if target.name != commit:
+            raise ValueError('Only the exact known legacy release can be adopted')
+        archive = download_archive(commit)
+        with tempfile.TemporaryDirectory(prefix='reshow-adopt-') as temporary:
+            expected = Path(temporary)
+            extract_runtime(archive, expected)
+            if runtime_hashes(public) != runtime_hashes(expected):
+                raise ValueError('The installed legacy public files differ from the immutable source')
+        temporary_stamp = public / 'release.json.next'
+        try:
+            with temporary_stamp.open('x') as output:
+                output.write(json.dumps({'commit': commit}) + '\n')
+            temporary_stamp.chmod(0o644)
+            temporary_stamp.replace(stamp)
+        finally:
+            temporary_stamp.unlink(missing_ok=True)
+        print('Adopted exact existing ReShow legacy release ' + commit)
 
 
 def deploy(commit):
@@ -138,7 +191,9 @@ def install_release(commit):
 if __name__ == '__main__':
     if len(sys.argv) == 3 and sys.argv[1] == '--validate':
         validate(sys.argv[2])
+    elif len(sys.argv) == 3 and sys.argv[1] == '--adopt':
+        adopt(sys.argv[2])
     elif len(sys.argv) == 2:
         deploy(sys.argv[1])
     else:
-        raise SystemExit('Usage: reshow-deploy [--validate] <40-character commit SHA>')
+        raise SystemExit('Usage: reshow-deploy [--validate|--adopt] <40-character commit SHA>')

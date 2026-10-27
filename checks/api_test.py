@@ -7,8 +7,11 @@ import io
 import json
 import os
 from pathlib import Path
+import queue
+import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from unittest.mock import patch
@@ -41,6 +44,26 @@ def event(body=None, **headers):
 
 
 class ApiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.certificates = tempfile.TemporaryDirectory()
+        cls.certificate_directory = Path(cls.certificates.name)
+        cls.certificate = cls.certificate_directory / "localhost.pem"
+        cls.private_key = cls.certificate_directory / "localhost.key"
+        configuration = cls.certificate_directory / "openssl.cnf"
+        configuration.write_text(
+            "[req]\ndistinguished_name=subject\nx509_extensions=localhost\nprompt=no\n"
+            "[subject]\nCN=localhost\n[localhost]\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n"
+        )
+        subprocess.run([
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+            "-keyout", str(cls.private_key), "-out", str(cls.certificate), "-config", str(configuration),
+        ], check=True, capture_output=True, timeout=20)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.certificates.cleanup()
+
     def setUp(self):
         self.environment = patch.dict(os.environ, {"RESHOW_ALLOWED_ORIGIN": ORIGIN})
         self.environment.start()
@@ -88,14 +111,40 @@ class ApiTests(unittest.TestCase):
             'assert server.create_exhibit_name(description) == description'
         )], check=True, timeout=5)
 
-    def test_local_startup_reports_bind_address_without_claiming_a_protocol(self):
+    def test_local_startup_configures_tls_before_serving_and_reports_https(self):
         output = io.StringIO()
-        with patch.object(sys, "argv", ["server.py"]), patch.object(server, "ThreadingHTTPServer") as httpd, redirect_stdout(output):
+        arguments = ["server.py", "--cert-file", str(self.certificate), "--key-file", str(self.private_key)]
+        with patch.object(sys, "argv", arguments), patch.object(server, "ThreadingHTTPServer") as httpd, patch.object(server.ssl, "SSLContext") as context, redirect_stdout(output):
+            httpd.return_value.server_port = 8000
+            original_socket = httpd.return_value.socket
             httpd.return_value.serve_forever.side_effect = KeyboardInterrupt
             server.main()
-        self.assertIn("ReShow is listening on 127.0.0.1:8000", output.getvalue())
-        self.assertNotIn("://", output.getvalue())
+        context.assert_called_once_with(ssl.PROTOCOL_TLS_SERVER)
+        self.assertEqual(context.return_value.minimum_version, ssl.TLSVersion.TLSv1_2)
+        context.return_value.load_cert_chain.assert_called_once_with(certfile=str(self.certificate), keyfile=str(self.private_key))
+        context.return_value.wrap_socket.assert_called_once_with(original_socket, server_side=True)
+        self.assertIn("ReShow HTTPS is listening on 127.0.0.1:8000", output.getvalue())
         httpd.return_value.server_close.assert_called_once()
+
+    def test_local_startup_without_certificate_arguments_fails_before_binding(self):
+        with patch.object(sys, "argv", ["server.py"]), patch.object(server, "ThreadingHTTPServer") as httpd, patch.object(sys, "stderr", io.StringIO()):
+            with self.assertRaises(SystemExit) as error:
+                server.main()
+        self.assertEqual(error.exception.code, 2)
+        httpd.assert_not_called()
+
+    def test_local_startup_with_missing_or_invalid_certificates_fails_before_binding(self):
+        missing = self.certificate_directory / "missing.pem"
+        invalid = self.certificate_directory / "invalid.pem"
+        invalid.write_text("not a TLS certificate or key")
+        cases = [(missing, self.private_key), (invalid, self.private_key),
+                 (self.certificate, missing), (self.certificate, invalid)]
+        for certificate, key in cases:
+            arguments = ["server.py", "--cert-file", str(certificate), "--key-file", str(key)]
+            with self.subTest(certificate=certificate.name, key=key.name), patch.object(sys, "argv", arguments), patch.object(server, "ThreadingHTTPServer") as httpd:
+                with self.assertRaises(OSError):
+                    server.main()
+                httpd.assert_not_called()
 
     def test_invalid_uploads_fail_before_any_outbound_request(self):
         cases = [(multipart(account="../outside"), 400),
@@ -155,22 +204,43 @@ class ApiTests(unittest.TestCase):
                 server.cloudflare_request("https://api.cloudflare.com/endpoint", TOKEN, {})
         self.assertIsNone(server.NoRedirects().redirect_request(None, None, 302, "", {}, "https://attacker.example"))
 
-    def test_local_static_server_keeps_backend_and_repository_files_private(self):
-        httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.StudioHandler)
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-        thread.start()
-        try:
-            connection = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=5)
-            for path, expected in (("/", 200), ("/js/app.js", 200), ("/server.py", 404), ("/lambda_handler.py", 404), ("/.git/config", 404), ("/js/", 404)):
-                connection.request("GET", path)
-                reply = connection.getresponse()
-                self.assertEqual(reply.status, expected, path)
-                reply.read()
-            connection.close()
-        finally:
-            httpd.shutdown()
-            httpd.server_close()
-            thread.join(timeout=5)
+    def test_local_tls_server_accepts_verified_https_rejects_http_and_keeps_backend_private(self):
+        created = queue.Queue()
+        http_server = server.ThreadingHTTPServer
+
+        def capture_server(*args, **kwargs):
+            instance = http_server(*args, **kwargs)
+            created.put(instance)
+            return instance
+
+        arguments = ["server.py", "--port", "0", "--cert-file", str(self.certificate), "--key-file", str(self.private_key)]
+        with patch.object(sys, "argv", arguments), patch.object(server, "ThreadingHTTPServer", side_effect=capture_server):
+            thread = threading.Thread(target=server.main, daemon=True)
+            thread.start()
+            httpd = created.get(timeout=5)
+            try:
+                context = ssl.create_default_context(cafile=str(self.certificate))
+                connection = http.client.HTTPSConnection("127.0.0.1", httpd.server_port, context=context, timeout=5)
+                connection.connect()
+                self.assertIn(connection.sock.version(), ("TLSv1.2", "TLSv1.3"))
+                self.assertEqual(httpd.socket.context.minimum_version, ssl.TLSVersion.TLSv1_2)
+                for path, expected in (("/", 200), ("/js/app.js", 200), ("/server.py", 404), ("/lambda_handler.py", 404), ("/.git/config", 404), ("/js/", 404)):
+                    connection.request("GET", path)
+                    reply = connection.getresponse()
+                    self.assertEqual(reply.status, expected, path)
+                    reply.read()
+                connection.close()
+                plaintext = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=3)
+                try:
+                    with self.assertRaises((OSError, http.client.HTTPException)):
+                        plaintext.request("GET", "/")
+                        plaintext.getresponse()
+                finally:
+                    plaintext.close()
+            finally:
+                httpd.shutdown()
+                thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
 
 
 if __name__ == "__main__":
